@@ -7,7 +7,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
-	"os"
+
 	"strconv"
 	"sync/atomic"
 
@@ -78,6 +78,7 @@ func MapZimaOSDir(path string, acl *FolderACL) error {
 
 	if err != nil {
 		fmt.Printf("request failed: %v", err)
+		return err
 	}
 	defer resp.Body.Close()
 
@@ -120,6 +121,7 @@ func CreateZimaOSDir(path string) error {
 
 	if err != nil {
 		fmt.Printf("request failed: %v", err)
+		return err
 	}
 	defer resp.Body.Close()
 
@@ -128,6 +130,7 @@ func CreateZimaOSDir(path string) error {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		bodyBytes, _ := io.ReadAll(resp.Body) // 读取错误信息以便调试
 		fmt.Printf("api error (status %d): %s", resp.StatusCode, string(bodyBytes))
+		return fmt.Errorf("error creating directory in zimaOS %s", path)
 	}
 	bodyBytes, _ := io.ReadAll(resp.Body)
 
@@ -137,17 +140,7 @@ func CreateZimaOSDir(path string) error {
 	return nil
 }
 
-func VerifyFile(remoteSize int64, localPath string) error {
 
-	info, err := os.Stat(localPath)
-	if err != nil {
-		return err
-	}
-	if info.Size() != remoteSize {
-		return fmt.Errorf("size mismatch: %d vs %d", remoteSize, info.Size())
-	}
-	return nil
-}
 
 func UploadFile(reader io.Reader, size int64, path string) error {
 
@@ -194,6 +187,7 @@ func UploadFile(reader io.Reader, size int64, path string) error {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		bodyBytes, _ := io.ReadAll(resp.Body) // 读取错误信息以便调试
 		fmt.Printf("api error (status %d): %s", resp.StatusCode, string(bodyBytes))
+		return fmt.Errorf(" upload file fail %s", path)
 	}
 	bodyBytes, _ := io.ReadAll(resp.Body)
 	fmt.Println(string(bodyBytes))
@@ -506,7 +500,7 @@ func GetRemoteFile(remotePath string) (io.ReadCloser, int64, error) {
 	size, err := strconv.ParseInt(string(cleanOutput), 10, 64)
 	if err != nil {
 		session1.Close()
-		panic(err)
+		return nil, -1, err
 	}
 
 	session, err := SshClient.NewSession()
@@ -591,14 +585,15 @@ type ProgressReader struct {
 }
 
 func NewProgressReader(r io.Reader, size int64) *ProgressReader {
-	atomic.StoreInt64(&UploadTotal, size)
 	atomic.StoreInt64(&UploadCurrent, int64(0))
+	atomic.StoreInt64(&UploadTotal, int64(size))
 	return &ProgressReader{r: r}
 }
 
 func (p *ProgressReader) Read(buf []byte) (int, error) {
 	n, err := p.r.Read(buf)
 	if n > 0 {
+		atomic.AddInt64(&UploadFilesTotal, int64(n))
 		atomic.AddInt64(&UploadCurrent, int64(n))
 	}
 	return n, err

@@ -1,13 +1,13 @@
 package main
 
 import (
-	"app/test"
 	"app/utils"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"sync/atomic"
+	"time"
 
 	"path/filepath"
 
@@ -26,16 +26,20 @@ var sshClient *ssh.Client
 
 var Users []utils.SynologyUser
 
-func walk(remoteRoot string, localRoot string) error {
+func walk(remoteRoot string, localRoot string, create bool) error {
 	fmt.Printf("walking on %s\n", remoteRoot)
 	acls, err := utils.GetSynologyACL(remoteRoot)
 	if err != nil {
 		return err
 	}
-	err = utils.CreateZimaOSDir(localRoot)
-	if err != nil {
-		return err
+
+	if !create {
+			err = utils.CreateZimaOSDir(localRoot)
+			if err != nil {
+				return err
+			}
 	}
+
 	err = utils.MapZimaOSDir(localRoot, acls)
 	if err != nil {
 		return err
@@ -56,7 +60,7 @@ func walk(remoteRoot string, localRoot string) error {
 	for _, folder := range folders {
 		fullRemoteDir := filepath.Join(remoteRoot, folder)
 		fullLocalDir := filepath.Join(localRoot, folder)
-		err = walk(fullRemoteDir, fullLocalDir)
+		err = walk(fullRemoteDir, fullLocalDir, false)
 		if err != nil {
 			return err
 		}
@@ -102,7 +106,7 @@ func configHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 	// 允许的方法
 	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-	
+
 	// 处理浏览器的预检请求 (Preflight OPTIONS request)
 	// 浏览器在发送 POST 之前会先发一个 OPTIONS 询问服务器是否允许跨域
 	if r.Method == "OPTIONS" {
@@ -140,7 +144,7 @@ func configHandler(w http.ResponseWriter, r *http.Request) {
 
 	utils.SshPort = reqData.Synology.Port
 
-	utils.ZimaHost = reqData.Zima.Host 
+	utils.ZimaHost = reqData.Zima.Host
 	utils.ZimaUsername = reqData.Zima.Username
 	utils.ZimaPassword = reqData.Zima.Password
 
@@ -241,7 +245,7 @@ func zimaStorageHandler(w http.ResponseWriter, r *http.Request) {
 
 type MigrationRequest struct {
 	// key是源路径(群晖), value是目标路径(Zima)
-	Mappings map[string]string `json:"mappings"` 
+	Mappings map[string]string `json:"mappings"`
 }
 
 // ... 之前的 Handler ...
@@ -249,6 +253,9 @@ type MigrationRequest struct {
 // 2. 新增：处理开始迁移的请求 [POST] /migrate
 func startMigrationHandler(w http.ResponseWriter, r *http.Request) {
 	utils.Done = false
+	utils.ErrorLog = nil
+	utils.UploadTime = 0
+	utils.UploadFilesTotal = 0
 	setupCORS(w)
 	if r.Method == "OPTIONS" {
 		w.WriteHeader(http.StatusOK)
@@ -275,18 +282,19 @@ func startMigrationHandler(w http.ResponseWriter, r *http.Request) {
 	// TODO: 这里以后会启动真正的后台 goroutine 任务
 	// go StartCopyTask(req.Mappings)
 	go func(tasks map[string]string) {
+		startTime := time.Now()
 		utils.CreateZimaUser()
 		for v, d := range tasks {
-			err := walk(v,d)
+			err := walk(v, d, true)
 			if err != nil {
-				panic(err)
+				utils.ErrorLog = append(utils.ErrorLog, err.Error())
 			}
 		}
+		utils.UploadTime = int64(time.Since(startTime).Seconds())
+		println(utils.UploadTime)
+		println(utils.UploadFilesTotal)
 		utils.Done = true
 	}(req.Mappings)
-	
-
-	
 
 }
 
@@ -301,45 +309,54 @@ func getProgressHandler(w http.ResponseWriter, r *http.Request) {
 	// 2. 构造假数据
 	// 注意：这里的字段名 (json:"...") 必须和前端使用的变量名完全一致
 	var ratio int
-	
+
 	current := atomic.LoadInt64(&utils.UploadCurrent)
-    total := atomic.LoadInt64(&utils.UploadTotal)
+	total := atomic.LoadInt64(&utils.UploadTotal)
 
 	if !utils.Done {
 		if total != 0 {
-		ratio = int(float64(current) / float64(total) * 100)
-	} else {
-		ratio = 100
-	}
+			ratio = int(float64(current) / float64(total) * 100)
+		} else {
+			ratio = 100
+		}
 
-	data := struct {
-		Status      string `json:"status"`
-		Percentage  int    `json:"percentage"`
-		CurrentFile string `json:"current_file"`
-		Message     string `json:"message"`
-	}{
-		Status:      "running",
-		Percentage:   ratio,   // 你可以手动改这个数字来测试进度条变化
-		CurrentFile: utils.UploadFileName,
-		Message:     "正在传输中",
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(data)
+		data := struct {
+			Status      string `json:"status"`
+			Percentage  int    `json:"percentage"`
+			CurrentFile string `json:"current_file"`
+			Message     string `json:"message"`
+		}{
+			Status:      "running",
+			Percentage:  ratio, // 你可以手动改这个数字来测试进度条变化
+			CurrentFile: utils.UploadFileName,
+			Message:     "正在传输中",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(data)
 	} else {
 		ratio = 100
 		data := struct {
-		Status      string `json:"status"`
-		Percentage  int    `json:"percentage"`
-		CurrentFile string `json:"current_file"`
-		Message     string `json:"message"`
-	}{
-		Status:      "finished",
-		Percentage:   ratio,   // 你可以手动改这个数字来测试进度条变化
-		CurrentFile: "",
-		Message:     "传输完成",
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(data)
+			Status      string   `json:"status"`
+			Percentage  int      `json:"percentage"`
+			CurrentFile string   `json:"current_file"`
+			Message     string   `json:"message"`
+			UploadTime  int64    `json:"uploadTime"`
+			TotalSize   int64    `json:"totalSize"`
+			Errors      []string `json:"errors,omitempty"`
+		}{
+			Status:      "finished",
+			Percentage:  ratio, // 你可以手动改这个数字来测试进度条变化
+			CurrentFile: "",
+			Message:     "传输完成",
+			UploadTime:  utils.UploadTime,       // 从 utils 获取计算好的时间
+			TotalSize:   utils.UploadFilesTotal, // 从 utils 获取累计的大小
+			Errors:      utils.ErrorLog,
+		}
+		println(utils.UploadTime)
+		println(utils.UploadFilesTotal)
+		
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(data)
 	}
 
 	// 3. 发送 JSON
@@ -356,22 +373,7 @@ func setupCORS(w http.ResponseWriter) {
 }
 
 func main() {
-	test.Allocate()
-	err := utils.LoginForAuth()
-	if err != nil {
-		panic(err)
-	}
-	err = utils.GetSynologyUser()
-	if err != nil {
 
-		panic(err)
-	}
-
-	err = utils.GetSynologyGroup()
-	if err != nil {
-
-		panic(err)
-	}
 	http.HandleFunc("/migrate", startMigrationHandler)
 	http.HandleFunc("/config", configHandler)
 	http.HandleFunc("/progress", getProgressHandler)
@@ -386,7 +388,5 @@ func main() {
 	if err := http.ListenAndServe(":5175", nil); err != nil {
 		fmt.Printf("启动失败: %s\n", err)
 	}
-
-
 
 }

@@ -24,3 +24,7 @@ var UploadCurrent int64
 var UploadFileName string
 
 var Done bool 
+
+var ErrorLog []string
+var UploadFilesTotal int64 
+var UploadTime int64 

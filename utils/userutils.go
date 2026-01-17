@@ -175,10 +175,10 @@ func GetSynologyGroup() error {
 
 func CreateZimaUser() error {
 	for u, _ := range UsersMap {
-		 MapZimaUser(u)
-	// 	if err != nil {
-	// 		return err
-	// 	}
+		 err := MapZimaUser(u)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
