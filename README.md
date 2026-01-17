@@ -2,7 +2,7 @@
 
 Synology 到 ZimaOS 引导迁移工具(后端).
 
-## 用户部分
+## 用户部分(`utils`)
 
 ### 准备
 
@@ -73,4 +73,8 @@ Synology 使用的是ACL进行权限管理, 包含用户, 组的权限; 在ZimaO
 - `MapZimaUser(username string) error`: 创建ZimaOS用户的核心功能, 新创建的账户密码默认`123456`, 已经创建的账户密码不变
 
 
+## 文档
 
+- `docs/demo.md` : 功能演示文档
+
+- `docs/migration-report-sample.md`: 迁移报告样例
