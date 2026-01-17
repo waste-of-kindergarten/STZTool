@@ -465,11 +465,22 @@ func GetSynologyACL(path string) (*FolderACL, error) {
 			Read:  acl.Read == 1,
 			Write: acl.Write == 1,
 		}
-		useracls = append(useracls, acl1)
+
+		if acl1.Read || acl1.Write {
+			useracls = append(useracls, acl1)
+		}
+		
 	}
 	folderacls := &FolderACL{
 		Auth: useracls,
 	}
+
+	prettyJSON, err := json.MarshalIndent(folderacls, "", "  ")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(string(prettyJSON))
+
 	return folderacls, nil
 
 }
@@ -479,22 +490,32 @@ func GetRemoteFile(remotePath string) (io.ReadCloser, int64, error) {
 
 	cmd := fmt.Sprintf("stat -c %%s \"%s\"", remotePath)
 	session1, err := SshClient.NewSession()
+	
 	if err != nil {
 		session1.Close()
 		return nil, -1, err
 	}
+	defer session1.Close()
 	output, err := session1.CombinedOutput(cmd)
 	if err != nil {
 		session1.Close()
 		return nil, -1, err
 	}
-	size, _ := strconv.ParseInt(string(output), 10, 64)
+
+	cleanOutput := strings.TrimSpace(string(output))
+	size, err := strconv.ParseInt(string(cleanOutput), 10, 64)
+	if err != nil {
+		session1.Close()
+		panic(err)
+	}
 
 	session, err := SshClient.NewSession()
+	
 	if err != nil {
 		session.Close()
 		return nil, -1, err
 	}
+
 	stdout, err := session.StdoutPipe()
 	if err != nil {
 		session.Close()
@@ -511,6 +532,8 @@ func GetRemoteFile(remotePath string) (io.ReadCloser, int64, error) {
 		session: session,
 	}
 
+	UploadFileName = remotePath
+	fmt.Printf("file size is %d", size)
 	return reader, size, nil
 }
 
@@ -569,6 +592,7 @@ type ProgressReader struct {
 
 func NewProgressReader(r io.Reader, size int64) *ProgressReader {
 	atomic.StoreInt64(&UploadTotal, size)
+	atomic.StoreInt64(&UploadCurrent, int64(0))
 	return &ProgressReader{r: r}
 }
 

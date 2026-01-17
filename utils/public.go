@@ -21,3 +21,6 @@ var GroupsMap map[string] []string
 
 var UploadTotal   int64 
 var UploadCurrent int64 
+var UploadFileName string
+
+var Done bool 
